@@ -31,7 +31,6 @@ TinyGsmClientSecure LTEclient(modem);
 WiFiClientSecure WIFIclient;
 PubSubClient mqtt;
 
-// PubSubClient client(MQTT_SERVER, MQTT_PORT, espClient);
 long lastMsg = 0;
 char msg[50];
 int value = 0;
@@ -103,6 +102,18 @@ boolean setup_internet()
     return false;
 }
 
+void setup_mqtt() {
+    if(WiFi.status() == WL_CONNECTED) {
+        mqtt.setClient(WIFIclient);
+    } else if (modem.isGprsConnected()) {
+        mqtt.setClient(LTEclient);
+    } else {
+        Serial.print("No connection to internet has been made");
+        return;
+    }
+    mqtt.setServer(MQTT_SERVER, MQTT_PORT);
+}
+
 void modem_start() {
     // Set LED OFF
     pinMode(LED_PIN, OUTPUT);
@@ -118,13 +129,7 @@ void modem_start() {
 void publish(char *topic, char const *message)
 {
     Serial.println("hi");
-    if(WiFi.status() == WL_CONNECTED) {
-        mqtt.setClient(WIFIclient);
-    } else if (LTEclient.connected()) {
-        mqtt.setClient(LTEclient);
-    }
 
-    mqtt.setServer(MQTT_SERVER, MQTT_PORT);
 
     // Loop until we're reconnected
     while (!mqtt.connected())
@@ -152,7 +157,7 @@ void publish(char *topic, char const *message)
 void setup()
 {
     Serial.begin(115200);
-    WIFIclient.setInsecure();
+    // WIFIclient.setInsecure();
 
 
     modem_start();
@@ -182,7 +187,7 @@ void setup()
 
     // Setup the network connection
     setup_internet();
-
+    setup_mqtt();
 
     publish("test/gps/log", "setting up gps");
 
