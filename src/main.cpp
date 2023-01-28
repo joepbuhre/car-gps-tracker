@@ -36,8 +36,10 @@ int value = 0;
 String conn_mode = "";
 boolean on_battery = false;
 boolean prev_battery = false;
+boolean send_gps = false;
 RTC_DATA_ATTR boolean is_deepsleep = false;
 RTC_DATA_ATTR int deep_sleep_count = 0;
+int sleep_for = 120000;
 
 void read_adc_bat(float *voltage)
 {
@@ -48,7 +50,9 @@ void read_adc_bat(float *voltage)
     }
     in = (int)in / ADC_BATTERY_LEVEL_SAMPLES;
     float bat_mv = ((float)in / 4096) * 3600 * 2;
+    
     *voltage = bat_mv;
+    // *voltage = 5.5; // Uncomment this line for debugging on serial
 }
 
 float v_bat = 0;
@@ -57,18 +61,19 @@ void publish(char *topic, char const *message, boolean retain = false)
 {
     if(topic == "home/device_tracker/peugeot307/log" && conn_mode == "LTE") {
         return;
-    } 
+    }
 
     // Loop until we're reconnected
-    while (!mqtt.connected())
+    for (int i = 0; i < 3; i++)
     {
         Serial.print("Attempting MQTT connection...");
         // Attempt to connect
         if (mqtt.connect("ESP324G", MQTT_USER, MQTT_PASS))
         {
             Serial.println("connected");
+            break;
         }
-        else
+        else 
         {
             Serial.print("failed, rc=");
             Serial.print(mqtt.state());
@@ -76,6 +81,11 @@ void publish(char *topic, char const *message, boolean retain = false)
             // Wait 5 seconds before retrying
             delay(5000);
         }
+        delay(5000);
+    }
+
+    if(!mqtt.connected()) {
+        esp_restart();
     }
     mqtt.loop();
 
@@ -193,11 +203,13 @@ void modem_start()
 
 void setup()
 {
+    Serial.begin(115200);
     // Set battery input
     pinMode(PIN_ADC_BAT, INPUT);
     
     read_adc_bat(&v_bat);
-    if(is_deepsleep == true && v_bat > 0 && deep_sleep_count < 30)
+    Serial.println(("deep_sleep_count=" + String(deep_sleep_count) + ", v_bat=" + String(v_bat,2) + ", is_deepsleep=" + String(is_deepsleep)).c_str());
+    if(is_deepsleep == true && v_bat > 0 && deep_sleep_count < 15)
     {
         deep_sleep_count++;
         esp_deep_sleep(60e06);
@@ -206,10 +218,6 @@ void setup()
         deep_sleep_count = 0;
         is_deepsleep = false;
     }
-
-    
-    
-    Serial.begin(115200);
 
     modem_start();
 
@@ -243,6 +251,10 @@ void setup()
     {
         WIFIclient.setInsecure();
         Serial.println("Setting wifi to insecure");
+
+        // Setting lower increment because of WiFi (bandwidth not an issue anymore)
+        Serial.println("Setting interval to ever 20 seconds");
+        sleep_for = 20000;
     }
 
     setup_mqtt();
@@ -260,6 +272,13 @@ void setup()
 
 void loop()
 {
+    // Check if we're still connected
+    if(WiFi.status() != WL_CONNECTED && !modem.isGprsConnected())
+    {
+        Serial.println("We don't have an internet connection, setting up internet");
+        setup_internet();
+    }
+
     read_adc_bat(&v_bat);
 
     if(v_bat > 0) {
@@ -269,7 +288,7 @@ void loop()
     }
 
     if(prev_battery != on_battery) {
-        String str = "{\"state\": "+ String(on_battery) +" }";
+        String str = "{\"state\": "+ String(v_bat, 4) +" }";
         publish("home/device_tracker/peugeot307/battery", str.c_str(), true);
     }
 
@@ -324,7 +343,7 @@ void loop()
 
             publish("home/device_tracker/peugeot307/state", "{\"state\": \"gps_connected\"}");
             publish("home/device_tracker/peugeot307/attributes", jsonstr.c_str(), true);
-
+            send_gps = true;
             break;
         }
         else
@@ -349,12 +368,16 @@ void loop()
         Serial.println(" SGPIO=0,4,1,0 false ");
     }
 
-    if(on_battery)
+    if(on_battery && send_gps)
     {
         publish("home/device_tracker/peugeot307/log", "We're on battery, so goodnight ;)");
         publish("home/device_tracker/peugeot307/state", "{\"state\": \"deep_sleep\"}");
+        is_deepsleep=true;
         esp_deep_sleep(60e6);
+    } else if(send_gps) {
+        Serial.println("Sleeping for: " + String(sleep_for));
+        delay(sleep_for);
     } else {
-        delay(20000);
+        publish("home/device_tracker/peugeot307/log", "Failed to send GPS, going again");
     }
 }
